@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1a1a2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" href="icon-192.png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <title>VoiceBook</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      margin-top: 40px;
+      margin-bottom: 8px;
+      color: #fff;
+      letter-spacing: 2px;
+    }
+
+    .subtitle {
+      font-size: 0.85rem;
+      color: #888;
+      margin-bottom: 40px;
+    }
+
+    /* Config section */
+    .config {
+      width: 100%;
+      max-width: 400px;
+      margin-bottom: 30px;
+    }
+
+    .config label {
+      display: block;
+      font-size: 0.8rem;
+      color: #aaa;
+      margin-bottom: 4px;
+    }
+
+    .config input {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #333;
+      border-radius: 8px;
+      background: #16213e;
+      color: #fff;
+      font-size: 0.95rem;
+      outline: none;
+    }
+
+    .config input:focus {
+      border-color: #e94560;
+    }
+
+    .config .hint {
+      font-size: 0.7rem;
+      color: #666;
+      margin-top: 4px;
+    }
+
+    /* Record button */
+    .rec-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+    }
+
+    .btn-rec {
+      width: 140px;
+      height: 140px;
+      border-radius: 50%;
+      border: 4px solid #e94560;
+      background: transparent;
+      color: #e94560;
+      font-size: 1.1rem;
+      font-weight: 700;
+      letter-spacing: 2px;
+      cursor: pointer;
+      transition: all 0.3s;
+      position: relative;
+    }
+
+    .btn-rec.recording {
+      background: #e94560;
+      color: #fff;
+      animation: pulse 1.5s infinite;
+    }
+
+    .btn-rec:active {
+      transform: scale(0.95);
+    }
+
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(233, 69, 96, 0.5); }
+      50% { box-shadow: 0 0 0 20px rgba(233, 69, 96, 0); }
+    }
+
+    /* Timer */
+    .timer {
+      font-size: 2rem;
+      font-variant-numeric: tabular-nums;
+      color: #fff;
+      font-weight: 300;
+    }
+
+    /* Status */
+    .status {
+      font-size: 0.85rem;
+      color: #888;
+      text-align: center;
+      min-height: 20px;
+    }
+
+    .status.sending {
+      color: #f0a500;
+    }
+
+    .status.success {
+      color: #4ecca3;
+    }
+
+    .status.error {
+      color: #e94560;
+    }
+
+    /* Chunks indicator */
+    .chunks-info {
+      font-size: 0.75rem;
+      color: #555;
+    }
+
+    /* Progress bar */
+    .progress-bar {
+      width: 100%;
+      max-width: 300px;
+      height: 4px;
+      background: #333;
+      border-radius: 2px;
+      overflow: hidden;
+      display: none;
+    }
+
+    .progress-bar.visible {
+      display: block;
+    }
+
+    .progress-bar .fill {
+      height: 100%;
+      background: #e94560;
+      width: 0%;
+      transition: width 0.3s;
+    }
+
+    /* Bottom info */
+    .footer {
+      margin-top: auto;
+      padding: 20px 0;
+      font-size: 0.7rem;
+      color: #444;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>VoiceBook</h1>
+  <p class="subtitle">Dictez votre livre</p>
+
+  <div class="config">
+    <label for="docId">Google Doc ID</label>
+    <input type="text" id="docId" placeholder="1AbC...xyz" autocomplete="off">
+    <p class="hint">ID du document Google Docs (dans l'URL après /d/)</p>
+  </div>
+
+  <div class="rec-area">
+    <div class="timer" id="timer">00:00</div>
+
+    <button class="btn-rec" id="btnRec" onclick="toggleRecording()">
+      REC
+    </button>
+
+    <div class="status" id="status"></div>
+    <div class="chunks-info" id="chunksInfo"></div>
+
+    <div class="progress-bar" id="progressBar">
+      <div class="fill" id="progressFill"></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    VoiceBook — Préo IA<br>
+    Audio envoyé à Groq Whisper via n8n
+  </div>
+
+  <script>
+    // ===== CONFIG =====
+    const WEBHOOK_URL = 'https://automation.preo-ia.info/webhook/voicebook-dictation';
+    const CHUNK_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+
+    // ===== STATE =====
+    let mediaRecorder = null;
+    let chunks = [];          // finished chunks (Blob[])
+    let currentChunks = [];   // current recording buffer
+    let isRecording = false;
+    let timerInterval = null;
+    let startTime = 0;
+    let chunkTimer = null;
+    let sessionTimestamp = '';
+
+    // ===== DOM =====
+    const btnRec = document.getElementById('btnRec');
+    const timerEl = document.getElementById('timer');
+    const statusEl = document.getElementById('status');
+    const chunksInfoEl = document.getElementById('chunksInfo');
+    const progressBar = document.getElementById('progressBar');
+    const progressFill = document.getElementById('progressFill');
+    const docIdInput = document.getElementById('docId');
+
+    // Persist doc ID
+    docIdInput.value = localStorage.getItem('voicebook_docId') || '';
+    docIdInput.addEventListener('change', () => {
+      localStorage.setItem('voicebook_docId', docIdInput.value.trim());
+    });
+
+    // ===== RECORDING =====
+    async function toggleRecording() {
+      if (isRecording) {
+        stopRecording();
+      } else {
+        await startRecording();
+      }
+    }
+
+    async function startRecording() {
+      const docId = docIdInput.value.trim();
+      if (!docId) {
+        setStatus('Entrez le Google Doc ID', 'error');
+        docIdInput.focus();
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            sampleRate: 16000
+          }
+        });
+
+        chunks = [];
+        currentChunks = [];
+        sessionTimestamp = new Date().toISOString();
+
+        // Determine best supported format
+        const mimeType = getSupportedMimeType();
+
+        mediaRecorder = new MediaRecorder(stream, {
+          mimeType: mimeType,
+          audioBitsPerSecond: 64000
+        });
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) {
+            currentChunks.push(e.data);
+          }
+        };
+
+        mediaRecorder.onstop = () => {
+          // Finalize current chunk
+          if (currentChunks.length > 0) {
+            const blob = new Blob(currentChunks, { type: mimeType });
+            chunks.push(blob);
+            currentChunks = [];
+          }
+        };
+
+        // Collect data every second for smooth chunking
+        mediaRecorder.start(1000);
+
+        isRecording = true;
+        btnRec.textContent = 'STOP';
+        btnRec.classList.add('recording');
+        setStatus('Enregistrement en cours...', '');
+        startTimer();
+        startChunkTimer(mimeType);
+
+      } catch (err) {
+        console.error('Mic error:', err);
+        setStatus('Accès micro refusé', 'error');
+      }
+    }
+
+    function stopRecording() {
+      if (!mediaRecorder) return;
+
+      clearInterval(chunkTimer);
+      mediaRecorder.stop();
+
+      // Stop all tracks
+      mediaRecorder.stream.getTracks().forEach(t => t.stop());
+
+      isRecording = false;
+      btnRec.textContent = 'REC';
+      btnRec.classList.remove('recording');
+      stopTimer();
+
+      // Wait a bit for onstop to fire, then send
+      setTimeout(() => {
+        sendAllChunks();
+      }, 500);
+    }
+
+    function startChunkTimer(mimeType) {
+      chunkTimer = setInterval(() => {
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+          // Stop current to finalize chunk
+          mediaRecorder.stop();
+
+          // Collect finalized chunk
+          setTimeout(() => {
+            if (currentChunks.length > 0) {
+              const blob = new Blob(currentChunks, { type: mimeType });
+              chunks.push(blob);
+              currentChunks = [];
+              updateChunksInfo();
+            }
+
+            // Restart recording
+            if (isRecording) {
+              const stream = mediaRecorder.stream;
+              mediaRecorder = new MediaRecorder(stream, {
+                mimeType: mimeType,
+                audioBitsPerSecond: 64000
+              });
+              mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) currentChunks.push(e.data);
+              };
+              mediaRecorder.onstop = () => {
+                if (currentChunks.length > 0) {
+                  const blob = new Blob(currentChunks, { type: mimeType });
+                  chunks.push(blob);
+                  currentChunks = [];
+                }
+              };
+              mediaRecorder.start(1000);
+            }
+          }, 200);
+        }
+      }, CHUNK_DURATION_MS);
+    }
+
+    // ===== SENDING =====
+    async function sendAllChunks() {
+      const docId = docIdInput.value.trim();
+      if (chunks.length === 0) {
+        setStatus('Aucun audio capturé', 'error');
+        return;
+      }
+
+      setStatus(`Envoi de ${chunks.length} chunk(s)...`, 'sending');
+      progressBar.classList.add('visible');
+      btnRec.disabled = true;
+
+      const fileExt = getFileExtension();
+
+      for (let i = 0; i < chunks.length; i++) {
+        const progress = ((i) / chunks.length) * 100;
+        progressFill.style.width = progress + '%';
+        setStatus(`Envoi chunk ${i + 1}/${chunks.length}...`, 'sending');
+
+        try {
+          const formData = new FormData();
+          formData.append('data', chunks[i], `chunk_${i}.${fileExt}`);
+          formData.append('chunkIndex', i.toString());
+          formData.append('totalChunks', chunks.length.toString());
+          formData.append('documentId', docId);
+          formData.append('sessionTimestamp', sessionTimestamp);
+
+          const response = await fetch(WEBHOOK_URL, {
+            method: 'POST',
+            body: formData
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          const result = await response.json();
+          console.log(`Chunk ${i} result:`, result);
+
+        } catch (err) {
+          console.error(`Chunk ${i} error:`, err);
+          setStatus(`Erreur chunk ${i + 1}: ${err.message}`, 'error');
+          btnRec.disabled = false;
+          return;
+        }
+      }
+
+      progressFill.style.width = '100%';
+      setStatus(`${chunks.length} chunk(s) transcrits avec succès !`, 'success');
+      btnRec.disabled = false;
+
+      // Reset after delay
+      setTimeout(() => {
+        progressBar.classList.remove('visible');
+        progressFill.style.width = '0%';
+        chunksInfoEl.textContent = '';
+      }, 3000);
+    }
+
+    // ===== HELPERS =====
+    function getSupportedMimeType() {
+      const types = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/ogg',
+        'audio/mp4'
+      ];
+      for (const type of types) {
+        if (MediaRecorder.isTypeSupported(type)) return type;
+      }
+      return 'audio/webm'; // fallback
+    }
+
+    function getFileExtension() {
+      const mime = getSupportedMimeType();
+      if (mime.includes('webm')) return 'webm';
+      if (mime.includes('ogg')) return 'ogg';
+      if (mime.includes('mp4')) return 'mp4';
+      return 'webm';
+    }
+
+    function startTimer() {
+      startTime = Date.now();
+      timerInterval = setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        const mins = Math.floor(elapsed / 60000);
+        const secs = Math.floor((elapsed % 60000) / 1000);
+        timerEl.textContent =
+          String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+      }, 200);
+    }
+
+    function stopTimer() {
+      clearInterval(timerInterval);
+    }
+
+    function setStatus(msg, type) {
+      statusEl.textContent = msg;
+      statusEl.className = 'status' + (type ? ' ' + type : '');
+    }
+
+    function updateChunksInfo() {
+      chunksInfoEl.textContent = `${chunks.length} chunk(s) en mémoire`;
+    }
+
+    // ===== SERVICE WORKER =====
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  </script>
+</body>
+</html>

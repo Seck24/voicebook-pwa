@@ -1,0 +1,166 @@
+{
+  "name": "VoiceBook — Dictée vocale → Google Docs",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voicebook-dictation",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "voicebook-dictation"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/audio/transcriptions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            },
+            {
+              "parameterType": "formData",
+              "name": "model",
+              "value": "whisper-large-v3"
+            },
+            {
+              "parameterType": "formData",
+              "name": "language",
+              "value": "fr"
+            },
+            {
+              "parameterType": "formData",
+              "name": "response_format",
+              "value": "text"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "groq-transcribe",
+      "name": "Groq Whisper",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "HTTP Header Auth — Groq"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Récupérer les infos du webhook\nconst webhookData = $('Webhook').first().json;\nconst chunkIndex = webhookData.body?.chunkIndex ?? 0;\nconst totalChunks = webhookData.body?.totalChunks ?? 1;\nconst sessionTimestamp = webhookData.body?.sessionTimestamp || new Date().toISOString();\n\n// Récupérer le texte transcrit (Groq renvoie du texte brut)\nlet text = $input.first().json.data || $input.first().json.text || '';\nif (typeof text !== 'string') text = JSON.stringify(text);\n\n// Supprimer les hésitations courantes en français\ntext = text\n  .replace(/\\b(euh|euuh|euhh|hm|hmm|hmmm|bah|ben|beh|ah|oh|hein|genre|voilà|quoi|donc euh)\\b[,.]?\\s*/gi, '')\n  .replace(/\\s{2,}/g, ' ')\n  .trim();\n\n// Capitaliser la première lettre\nif (text.length > 0) {\n  text = text.charAt(0).toUpperCase() + text.slice(1);\n}\n\n// Ajouter un point final si absent\nif (text.length > 0 && !/[.!?]$/.test(text)) {\n  text += '.';\n}\n\n// Construire le texte final avec séparateur horodaté pour le premier chunk\nlet finalText = '';\nif (chunkIndex === 0) {\n  const date = new Date(sessionTimestamp);\n  const formatted = date.toLocaleString('fr-FR', {\n    day: '2-digit', month: '2-digit', year: 'numeric',\n    hour: '2-digit', minute: '2-digit',\n    timeZone: 'Africa/Abidjan'\n  });\n  finalText = '\\n\\n--- ' + formatted + ' ---\\n\\n' + text;\n} else {\n  finalText = ' ' + text;\n}\n\nreturn [{ json: { finalText, chunkIndex, totalChunks } }];"
+      },
+      "id": "clean-text",
+      "name": "Nettoyage texte",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Webhook').first().json.body.documentId }}"
+        },
+        "text": "={{ $json.finalText }}",
+        "options": {}
+      },
+      "id": "google-docs-append",
+      "name": "Google Docs Append",
+      "type": "n8n-nodes-base.googleDocs",
+      "typeVersion": 2,
+      "position": [920, 300],
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "",
+          "name": "Google Docs OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, chunkIndex: $json.chunkIndex, totalChunks: $json.totalChunks, characters: $json.finalText.length }) }}"
+      },
+      "id": "respond-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1160, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Groq Whisper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Whisper": {
+      "main": [
+        [
+          {
+            "node": "Nettoyage texte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nettoyage texte": {
+      "main": [
+        [
+          {
+            "node": "Google Docs Append",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Docs Append": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "VoiceBook"
+    }
+  ]
+}
